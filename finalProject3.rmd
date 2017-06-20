@@ -1,0 +1,138 @@
+---
+title: "Practical Machine Learning Final Project"
+author: "laura M"
+date: "6/16/2017"
+output: html_document
+---
+
+## Load the data    
+We load the data and appropriate packages:
+
+```{r}
+library(caret)
+library(rpart)
+library(randomForest)
+library(parallel)
+library(doParallel)
+library(rpart.plot)
+library(RColorBrewer)
+
+
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+#setwd('Dropbox/practicalMachineLearning/')
+mydf = read.csv('pml-training.csv', header = TRUE)
+mydf <- data.frame(mydf)
+
+testingdf <- read.csv('pml-testing.csv', header = TRUE)
+```
+## Cleaning and splitting the data set
+After a quick exploratory analysis, we realized that many of the variables contained in this data set have most of the entries as "NA". We remove those variables since they do not contribute anything to our analysis, we also remove the variables that are not relevant, like names or times of collection of the data:
+
+```{r}
+computePercentNA <- sapply(mydf, function(x){(sum(is.na(x) == TRUE))/length(x)})
+keepcols <- names(which(computePercentNA < 0.75))
+newdf <- mydf[keepcols]
+
+
+computePercentNAtesting <- sapply(testingdf, function(x){(sum(is.na(x) == TRUE))/length(x)})
+keepcolstesting <- names(which(computePercentNA < 0.75))
+newdftesting <- mydf[keepcolstesting]
+
+nsv1 <- nearZeroVar(newdf,saveMetrics=TRUE)
+CleanData <- newdf[,which(nsv1$nzv==FALSE)]
+
+nsv2 <- nearZeroVar(newdftesting,saveMetrics=TRUE)
+CleanDataTesting <- newdftesting[,which(nsv2$nzv==FALSE)]
+
+#remove the irrelevant columns:
+cleanData2<-CleanData[,-c(1:7)]
+CleanDataTesting2 <- CleanDataTesting[,-c(1:7)]
+```
+
+## Partition the training data set.
+We partition the into two data sets, one for training and another one for testing. We also set commands to do cross validation with 10 folds and set the seed for reproducibility:
+
+```{r}
+set.seed(666)
+fitControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+
+
+inTrain <- createDataPartition(y=cleanData2$classe,
+                               p=0.75, list=FALSE)
+training <- cleanData2[inTrain,]
+testing <- cleanData2[-inTrain,]
+```
+
+## Exploring different algorithms to determine the one with the best accuracy
+Here we will try three different algorithms seen in class to determine which one to use in the test set. We will use random forests, decision trees and K- nearest neighbors. For each algorithm, we determine its accuracy and its out of sample error, by evaluating it in the testing data set (the one that is part of the big training data set, not the one that will be saved for later for the quiz).
+
+1. Use Random forests
+
+```{r}
+outOfSampleError <- numeric()
+
+fit <- train(classe ~ ., data=training, method="rf", trControl=fitControl, ntree=200)
+fit
+predictRf <- predict(fit, newdata = testing)
+cm <- confusionMatrix(data = predictRf, testing$classe)
+sum(diag(cm$table))/sum(cm$table)
+rfAccuracy <-sum(diag(cm$table))/sum(cm$table)
+rfOutOfSampleError <- c(outOfSampleError, 1 - rfAccuracy)
+```
+
+2. Use decision trees:
+```{r}
+modFit <- train(classe ~ ., data=training, preProcess=c("center", "scale"),  method="rpart", trControl=fitControl)
+modFit
+
+predictDt <- predict(modFit, newdata = testing)
+cm <- confusionMatrix(data = predictDt, testing$classe)
+dtAccuracy <-sum(diag(cm$table))/sum(cm$table)
+dtOutOfSampleError <- c(outOfSampleError, 1 - dtAccuracy)
+```
+
+3. Use K-nearest neighbor:
+```{r}
+knn <- train(classe ~ ., method="knn", data=training, trControl= fitControl)
+predictKnn <- predict(knn, testing)
+cm <- confusionMatrix(data = predictKnn, testing$classe)
+KnnAccuracy <-sum(diag(cm$table))/sum(cm$table)
+KnnOutOfSampleError <- c(outOfSampleError, 1 - KnnAccuracy)
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+
+# Rank all the algorithms by their accuracy:
+We can now rank the three algorithms based on their accuracy and present the results in a nice table:
+
+```{r}
+myalgorithms <- c('Random forests', 'Decision trees', 'K Nearest Neighbor')
+myaccuracy <- c(rfAccuracy, dtAccuracy, KnnAccuracy)
+myerrors <- c(rfOutOfSampleError, dtOutOfSampleError, KnnOutOfSampleError)
+
+mytable <- data.frame(myalgorithms, myaccuracy, myerrors)
+mytable[order(mytable$myaccuracy)]
+```
+
+
+## Use random forests in the testing data set
+
+```{r}
+finalPrediction <- predict(fit, newdata=CleanDataTesting2)
+
+# create function to write predictions to files
+pml_write_files <- function(x) {
+    n <- length(x)
+    for(i in 1:n) {
+        filename <- paste0("problem_id_", i, ".txt")
+        write.table(x[i], file=filename, quote=F, row.names=F, col.names=F)
+    }
+}
+
+# create prediction files to submit
+pml_write_files(finalPrediction)
+```
